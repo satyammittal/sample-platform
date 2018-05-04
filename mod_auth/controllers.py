@@ -430,7 +430,7 @@ def manage():
 @template_renderer()
 def users():
     return {
-        'users': User.query.order_by(User.name.asc())
+        'users': User.query.order_by(User.name.asc()).all()
     }
 
 
