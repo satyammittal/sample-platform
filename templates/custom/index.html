@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Customize Tests{{ super() }}{% endblock %}
+{% block body %}
+<h1>Create custom tests on your fork</h1>
+{% if user is not none and user.has_role('tester') %}
+<form method="post" name="addTestFork" id="addTestFork" action="{{ url_for('.index') }}">
+    {{ addTestFork.csrf_token }}
+    {% if addTestFork.errors %}
+        <div class="grid-x">
+            <div class="callout alert">
+                {% for field, error in addTestFork.errors.items() %}
+                    {% for e in error %}
+                        {{ e }}<br>
+                    {% endfor %}
+                {% endfor %}
+            </div>
+        </div>
+    {% endif %}
+    <div class="grid-x">
+        <div class="medium-12 columns">
+            {{ macros.render_field(addTestFork.commit_url) }}
+        </div>
+        {% if commit_options == "loaded" %}
+            <div class="medium-6 columns">
+              {{ macros.render_field(addTestFork.commit_select) }}
+            </div>
+        {% elif commit_options == "git" %}
+            <div class="medium-12 columns">    
+                <a href="{{ url_for('auth.manage')}}">Link</a> your github to fetch your repository commits.
+            </div>
+        {% else %}
+            <div class="medium-12 columns">    
+                There are no latest commits in your repo last month.
+            </div>
+        {% endif %}
+        <div class="medium-6 columns">
+            {{ macros.render_field(addTestFork.platform) }}
+        </div>
+        <div class="medium-12 columns">
+            {{ macros.render_field(addTestFork.add) }}
+        </div>
+    </div>
+</form>
+<div class="grid-x">
+    <div class="column medium-8">
+        <h2>Your tests</h2>
+        <p>Below you can see the overview of the last {{ tests|length }} test runs that were performed:</p>
+        {% include "test/list_table.html" %}
+    </div>
+</div>
+{% else %}
+Contact admin for permission request to create individual tests.
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+    {{ super() }}
+    <script type="text/javascript">
+        $("input[name='commit_select']").change(function(){
+            $("#commit_url").val(this.value)
+        });
+    </script>
+{% endblock %}
