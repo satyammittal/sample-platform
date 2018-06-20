@@ -6,7 +6,6 @@ from mod_test.models import Fork, Test, TestType, TestPlatform, TestResult, Test
 from mod_regression.models import Category, RegressionTestOutput, RegressionTest, \
                                     regressionTestLinkTable, InputType, OutputType
 from mod_sample.models import Sample
-from collections import namedtuple
 from unittest import mock
 from flask import g, session
 
@@ -17,7 +16,7 @@ def load_config(file):
             'GITHUB_DEPLOY_KEY': 'test_deploy', 'GITHUB_CI_KEY': 'test_ci',
             'GITHUB_TOKEN': '', 'GITHUB_BOT': '',
             'GITHUB_OWNER': 'test_owner', 'GITHUB_REPOSITORY': 'test_repo',
-            'SECRET_KEY': 'test124', 'PRESERVE_CONTEXT_ON_EXCEPTION': False}
+            'SECRET_KEY': 'test124'}
 
 
 def MockRequests(url):

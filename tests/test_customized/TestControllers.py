@@ -99,3 +99,7 @@ class TestControllers(BaseTestCase):
                 and_(TestFork.test_id == Test.id, Test.platform == TestPlatform.windows)).first()
             assert test_linux is not None
             assert test_windows is not None
+
+    def test_customize_test_loads_github_commits(self, git_mock):
+        self.create_user_with_role(self.user_name, self.email, self.user_password, Role.tester)
+        self.set_github_access    
