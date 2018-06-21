@@ -1,13 +1,14 @@
+from collections import namedtuple
+from unittest import mock
 from flask_testing import TestCase
+from flask import g
 from database import create_session
 from mod_home.models import GeneralData, CCExtractorVersion
-from mod_auth.models import User, Role
-from mod_test.models import Fork, Test, TestType, TestPlatform, TestResult, TestResultFile
+from mod_auth.models import User
+from mod_test.models import Test, TestType, TestPlatform, TestResult, TestResultFile
 from mod_regression.models import Category, RegressionTestOutput, RegressionTest, \
                                     regressionTestLinkTable, InputType, OutputType
 from mod_sample.models import Sample
-from unittest import mock
-from flask import g, session
 
 
 def load_config(file):
@@ -22,8 +23,10 @@ def load_config(file):
 def MockRequests(url):
     if url == "https://api.github.com/repos/test/test_repo/commits/abcdef":
         return MockResponse({}, 200)
+    elif url == "https://api.github.com/user":
+        return MockResponse({"login": "test"}, 200)
     else:
-        return MockResponse({}, 200)
+        return MockResponse({}, 404)
 
 
 class BaseTestCase(TestCase):
@@ -33,9 +36,8 @@ class BaseTestCase(TestCase):
         Create an instance of the app with the testing configuration
         :return:
         """
-        self.user_name = "test"
-        self.user_password = "test123"
-        self.email = 'test@test.com'
+        user = namedtuple('user', 'name password email github_token')
+        self.user = user(name="test", password="test123", email="test@example.com", github_token="abcdefgh")
         from run import app
         return app
 
@@ -109,7 +111,7 @@ class BaseTestCase(TestCase):
         Create a user with specified user details and role.
         """
         from flask import g
-        user = User(self.user_name, email=self.email, password=User.generate_hash(self.user_password), role=role)
+        user = User(self.user.name, email=self.user.email, password=User.generate_hash(self.user.password), role=role)
         g.db.add(user)
         g.db.commit()
 

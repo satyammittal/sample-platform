@@ -3,7 +3,7 @@ mod_customized Controllers
 ===================
 In this module, users can test their fork branch with customized set of regression tests
 """
-from flask import Blueprint, g, request
+from flask import Blueprint, g, request, redirect, url_for
 from github import GitHub, ApiError
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
@@ -21,22 +21,25 @@ from sqlalchemy import and_
 mod_customized = Blueprint('custom', __name__)
 
 
+@check_access_rights([Role.tester, Role.contributor, Role.admin])
 @mod_customized.before_app_request
 def before_app_request():
-    g.menu_entries['custom'] = {
-        'title': 'Customize Test',
-        'icon': 'code-fork',
-        'route': 'custom.index'
-    }
+    if g.user is not None:
+        g.menu_entries['custom'] = {
+            'title': 'Customize Test',
+            'icon': 'code-fork',
+            'route': 'custom.index'
+        }
 
 
 @mod_customized.route('/', methods=['GET', 'POST'])
 @login_required
+@check_access_rights([Role.tester, Role.contributor, Role.admin])
 @template_renderer()
 def index():
     fork_test_form = TestForkForm(request.form)
     username = fetch_username_from_token()
-    commit_options = "git"
+    commit_options = False
     if username is not None:
         gh = GitHub(access_token=g.github['bot_token'])
         repository = gh.repos(username)(g.github['repository'])
@@ -49,45 +52,34 @@ def index():
         for commit in commits:
             commit_url = commit['html_url']
             commit_sha = commit['sha']
-            commit_option = ('<a href="{url}">{sha}</a>').format(url=commit_url, sha=commit_sha)
-            commit_arr.append((commit_url ,commit_option))
+            commit_option = (
+                '<a href="{url}">{sha}</a>').format(url=commit_url, sha=commit_sha)
+            commit_arr.append((commit_sha, commit_option))
         if len(commit_arr) > 0:
             fork_test_form.commit_select.choices = commit_arr
-            commit_options = "loaded"
-        else:
-            commit_options = "linked"
-    if fork_test_form.add.data and fork_test_form.validate_on_submit():
-        import re
+            commit_options = True
+    if username is not None and fork_test_form.add.data and fork_test_form.validate_on_submit():
         import requests
-        commit_url = fork_test_form.commit_url.data
-        # slicing string based on https://www.github.com/{username}/{repo}/commit/{hash}
-        format_string = r'(https://(www.)?)?github.com/(?P<username>\S+)/(?P<repo>\S+)/commit/(?P<hash>\S+)'
-        match = re.match(format_string, commit_url)
-        if match is not None:
-            username = match.group('username')
-            repo = match.group('repo')
-            if repo == g.github['repository']:
-                commit_hash = match.group('hash')
-                platforms = fork_test_form.platform.data
-                api_url = ('https://api.github.com/repos/{user}/{repo}/commits/{hash}').format(
-                    user=username, repo=repo, hash=commit_hash
-                )
-                response = requests.get(api_url)
-                if response.status_code == 404:
-                    fork_test_form.commit_url.errors.append('Wrong Commit URL')
-                else:
-                    add_test_to_kvm(username, repo, commit_hash, platforms)
-                    fork_test_form = TestForkForm()
-            else:
-                fork_test_form.commit_url.errors.append('Wrong Commit URL')
+        commit_hash = fork_test_form.commit_hash.data
+        repo = g.github['repository']
+        platforms = fork_test_form.platform.data
+        api_url = ('https://api.github.com/repos/{user}/{repo}/commits/{hash}').format(
+            user=username, repo=repo, hash=commit_hash
+        )
+        response = requests.get(api_url)
+        if response.status_code == 404:
+            fork_test_form.commit_hash.errors.append('Wrong Commit Hash')
         else:
-            fork_test_form.commit_url.errors.append('Wrong Commit URL')
-    tests = Test.query.filter(and_(TestFork.user_id == g.user.id, TestFork.test_id == Test.id)).order_by(Test.id.desc()).limit(50).all()
+            add_test_to_kvm(username, repo, commit_hash, platforms)
+            return redirect(url_for('custom.index'))
+    tests = Test.query.filter(and_(TestFork.user_id == g.user.id, TestFork.test_id == Test.id)).order_by(
+        Test.id.desc()).limit(50).all()
     return {
         'addTestFork': fork_test_form,
         'commit_options': commit_options,
         'tests': tests,
-        'TestType': TestType
+        'TestType': TestType,
+        'GitUser': username
     }
 
 
@@ -108,14 +100,3 @@ def add_test_to_kvm(username, repo, commit_hash, platforms):
         test_fork = TestFork(g.user.id, test.id)
         g.db.add(test_fork)
         g.db.commit()
-
-
-@mod_customized.route('/<test_id>')
-@template_renderer('test/by_id.html')
-def by_id(test_id):
-    fork_tests = g.db.query(TestFork.test_id).filter(TestFork.user_id == g.user.id).subquery()
-    test = Test.query.filter(and_(Test.id == test_id, Test.id.in_(fork_tests))).first()
-    if test is None:
-        raise TestNotFoundException('Test with id {id} does not exist'.format(id=test_id))
-
-    return get_data_for_test(test)

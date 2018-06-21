@@ -2,7 +2,7 @@
 {% block title %}Customize Tests{{ super() }}{% endblock %}
 {% block body %}
 <h1>Create custom tests on your fork</h1>
-{% if user is not none and user.has_role('tester') %}
+{% if GitUser is not none %}
 <form method="post" name="addTestFork" id="addTestFork" action="{{ url_for('.index') }}">
     {{ addTestFork.csrf_token }}
     {% if addTestFork.errors %}
@@ -18,15 +18,11 @@
     {% endif %}
     <div class="grid-x">
         <div class="medium-12 columns">
-            {{ macros.render_field(addTestFork.commit_url) }}
+            {{ macros.render_field(addTestFork.commit_hash) }}
         </div>
-        {% if commit_options == "loaded" %}
+        {% if commit_options %}
             <div class="medium-6 columns">
               {{ macros.render_field(addTestFork.commit_select) }}
-            </div>
-        {% elif commit_options == "git" %}
-            <div class="medium-12 columns">    
-                <a href="{{ url_for('auth.manage')}}">Link</a> your github to fetch your repository commits.
             </div>
         {% else %}
             <div class="medium-12 columns">    
@@ -49,7 +45,7 @@
     </div>
 </div>
 {% else %}
-Contact admin for permission request to create individual tests.
+<a href="{{ url_for('auth.manage')}}">Link</a> your github to run tests.
 {% endif %}
 {% endblock %}
 

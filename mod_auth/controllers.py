@@ -157,11 +157,10 @@ def fetch_username_from_token():
     session.auth = (user.email, user.github_token)
     try:
         response = session.get(url)
-        # Decode UTF-8 bytes to Unicode, and convert single quotes
-        # to double quotes to make it valid JSON
-        data = response.content.decode('utf8').replace("'", '"')
-        return str(json.loads(data)['login'])
+        data = response.json()
+        return str(data['login'])
     except:
+        g.log.error('Failed to fetch the user token')
         return None
 
 

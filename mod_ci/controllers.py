@@ -325,7 +325,7 @@ def kvm_processor(db, kvm_name, platform, repository, delay):
     try:
         fork_id = test.fork.id
         fork_url = test.fork.github
-        if "CCExtractor/ccextractor.git" not in fork_url:
+        if not check_main_repo(fork_url):
             remote = ('fork_{id}').format(id=fork_id)
             existing_remote = [each_remote.name for each_remote in repo.remotes]
             if remote in existing_remote:
@@ -670,7 +670,7 @@ def update_build_badge(status, test):
     :return: Nothing.
     :rtype: None
     """
-    if test.test_type == TestType.commit and 'CCExtractor/ccextractor.git' in test.fork.github:
+    if test.test_type == TestType.commit and check_main_repo(test.fork.github):
         parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         availableon = os.path.join(parent_dir, 'static', 'svg',
                                    '{status}-{platform}.svg'.format(status=status.upper(),
@@ -724,7 +724,7 @@ def progress_reporter(test_id, token):
                 gh = GitHub(access_token=g.github['bot_token'])
                 repository = gh.repos(g.github['repository_owner'])(g.github['repository'])
                 # Store the test commit for testing in case of commit
-                if status == TestStatus.completed and 'CCExtractor/ccextractor.git' in test.fork.github:
+                if status == TestStatus.completed and check_main_repo(test.fork.github):
                     commit_name = 'fetch_commit_' + test.platform.value
                     commit = GeneralData.query.filter(GeneralData.key == commit_name).first()
                     fetch_commit = Test.query.filter(
@@ -1149,3 +1149,11 @@ def in_maintenance_mode(platform):
         g.db.commit()
 
     return str(status.disabled)
+
+
+def check_main_repo(repo_url):
+    repo = ('{user}/{repo}').format(user=g.github['repository_owner'], repo=g.github['repository'])
+    if repo in repo_url:
+        return True
+    else:
+        return False

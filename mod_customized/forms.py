@@ -10,7 +10,7 @@ class MultiCheckboxField(SelectMultipleField):
 
 
 class TestForkForm(FlaskForm):
-    commit_url = StringField('Commit URL', [DataRequired(message='Commit url is not filled in'), url()])
+    commit_hash = StringField('Commit Hash', [DataRequired(message='Commit hash is not filled in')])
     commit_select = RadioField('Choose Commit', choices=[('','')], default='')
     platform = MultiCheckboxField('Platform', validators=[DataRequired()], choices=[(
         platform, platform) for platform in TestPlatform.values()])
