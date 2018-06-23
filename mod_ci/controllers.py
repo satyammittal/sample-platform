@@ -19,7 +19,7 @@ from git import Repo, InvalidGitRepositoryError, GitCommandError
 from github import GitHub, ApiError
 from multiprocessing import Process
 from lxml import etree
-from sqlalchemy import and_
+from sqlalchemy import and_, or_
 from sqlalchemy import func
 from sqlalchemy.sql import label
 from sqlalchemy.sql.functions import count
@@ -32,11 +32,12 @@ from mod_ci.models import Kvm, MaintenanceMode, BlockedUsers
 from mod_ci.forms import AddUsersToBlacklist, RemoveUsersFromBlacklist
 from mod_deploy.controllers import request_from_github, is_valid_signature
 from mod_home.models import GeneralData
-from mod_regression.models import Category, RegressionTestOutput, RegressionTest
+from mod_regression.models import Category, RegressionTestOutput, RegressionTest, regressionTestLinkTable
 from mod_auth.models import Role
 from mod_home.models import CCExtractorVersion
 from mod_sample.models import Issue
 from mod_test.models import TestType, Test, TestStatus, TestProgress, Fork, TestPlatform, TestResultFile, TestResult
+from mailer import Mailer
 
 if sys.platform.startswith("linux"):
     import libvirt
@@ -75,7 +76,7 @@ def start_platform(db, repository, delay=None):
     Function to check whether there is already running test for which it check the kvm progress and if no running test
     then it start a new test.
     """
-    from run import log, config
+    from run import config
 
     linux_kvm_name = config.get('KVM_LINUX_NAME', '')
     win_kvm_name = config.get('KVM_WINDOWS_NAME', '')
@@ -465,6 +466,28 @@ def queue_test(db, gh_commit, commit, test_type, branch="master", pr_nr=0):
     log.debug("Created tests, waiting for cron...")
 
 
+def inform_mailing_list(mailer, id, title, author, body):
+    """
+    Function that gets called when a issue is opened via the Webhook.
+    :param mailer: The mailer instance
+    :type mailer: Mailer
+    :param id: ID of the Issue Opened
+    :type id: int
+    :param title: Title of the Created Ossie
+    :type title: str
+    :param author: The Authors Username of the Issue
+    :type author: str
+    :param body: The Content of the Issue
+    :type body: str
+    """
+    subject = "GitHub Issue #{issue_number}".format(issue_number=id)
+    mailer.send_simple_message({
+        "to": "ccextractor-dev@googlegroups.com",
+        "subject": subject,
+        "text": "{title} - {author}\n {body}".format(title=title, author=author, body=body)
+    })
+
+
 @mod_ci.route('/start-ci', methods=['GET', 'POST'])
 @request_from_github()
 def start_ci():
@@ -568,10 +591,19 @@ def start_ci():
 
         elif event == "issues":
             issue_data = payload['issue']
+            issue_action = payload['action']
             issue = Issue.query.filter(Issue.issue_id == issue_data['number']).first()
+            issue_title = issue_data['title']
+            issue_id = issue_data['number']
+            issue_author = issue_data['user']['login']
+            issue_body = issue_data['body']
+
+            # Send Email to the Mailing List using the Mailer Module and Mailgun's API
+            if issue_action == "opened":
+                inform_mailing_list(g.mailer, issue_id, issue_title, issue_author, issue_body)
 
             if issue is not None:
-                issue.title = issue_data['title']
+                issue.title = issue_title
                 issue.status = issue_data['state']
                 g.db.commit()
 
@@ -587,7 +619,6 @@ def start_ci():
                 # Github recommends adding v to the version
                 if release_version[0] == 'v':
                     release_version = release_version[1:]
-                release_date = payload['created_at']
                 release_commit = GeneralData.query.filter(GeneralData.key == 'last_commit').first()
                 release = CCExtractorVersion(release_data, release_version, release_commit)
                 g.db.add(release)
@@ -798,7 +829,8 @@ def progress_reporter(test_id, token):
                     else:
                         state = Status.SUCCESS
                         message = 'Tests completed'
-
+                    if test.test_type == TestType.pull_request:
+                        comment_pr(test.id, state, test.pr_nr, test.platform.name)
                     update_build_badge(state, test)
 
                 else:
@@ -892,6 +924,74 @@ def progress_reporter(test_id, token):
             return "OK"
 
     return "FAIL"
+
+
+def comment_pr(test_id, state, pr_nr, platform):
+    """
+    Upload the test report to the github PR as comment
+
+    :param test_id: The identity of Test whose report will be uploaded
+    :type test_id: str
+    :crash: whether test results in crash or not
+    :type: boolean
+    :pr_nr: PR number to which test commit is related and comment will be uploaded
+    :type: str
+    """
+    from run import app, log
+    regression_testid_passed = g.db.query(TestResult.regression_test_id).outerjoin(
+                                TestResultFile, TestResult.test_id == TestResultFile.test_id).filter(
+                                TestResult.test_id == test_id,
+                                TestResult.expected_rc == TestResult.exit_code,
+                                or_(
+                                    TestResult.exit_code != 0,
+                                    and_(TestResult.exit_code == 0,
+                                         TestResult.regression_test_id == TestResultFile.regression_test_id,
+                                         TestResultFile.got.is_(None)
+                                         ),
+                                    and_(
+                                         RegressionTestOutput.regression_id == TestResult.regression_test_id,
+                                         RegressionTestOutput.ignore.is_(True),
+                                            ))).subquery()
+    passed = g.db.query(label('category_id', Category.id), label(
+        'success', count(regressionTestLinkTable.c.regression_id))).filter(
+            regressionTestLinkTable.c.regression_id.in_(regression_testid_passed),
+            Category.id == regressionTestLinkTable.c.category_id).group_by(
+                 regressionTestLinkTable.c.category_id).subquery()
+    tot = g.db.query(label('category', Category.name), label('total', count(regressionTestLinkTable.c.regression_id)),
+                     label('success', passed.c.success)).outerjoin(
+        passed, passed.c.category_id == Category.id).filter(
+        Category.id == regressionTestLinkTable.c.category_id).group_by(
+        regressionTestLinkTable.c.category_id).all()
+    regression_testid_failed = RegressionTest.query.filter(RegressionTest.id.notin_(regression_testid_passed)).all()
+    template = app.jinja_env.get_or_select_template('ci/pr_comment.txt')
+    message = template.render(tests=tot, failed_tests=regression_testid_failed, test_id=test_id,
+                              state=state, platform=platform)
+    log.debug('Github PR Comment Message Created for Test_id: {test_id}'.format(test_id=test_id))
+    try:
+        gh = GitHub(access_token=g.github['bot_token'])
+        repository = gh.repos(g.github['repository_owner'])(g.github['repository'])
+        # Pull requests are just issues with code, so github consider pr comments in issues
+        pull_request = repository.issues(pr_nr)
+        comments = pull_request.comments().get()
+        bot_name = g.github['bot_name']
+        comment_id = None
+        for comment in comments:
+            if(comment['user']['login'] == bot_name and platform in comment['body']):
+                comment_id = comment['id']
+                break
+        log.debug('Github PR Comment ID Fetched for Test_id: {test_id}'.format(test_id=test_id))
+        if comment_id is None:
+            comment = pull_request.comments().post(body=message)
+            comment_id = comment['id']
+        else:
+            pull_request = repository.issues()
+            comment = pull_request.comments(comment_id).post(body=message)
+        log.debug('Github PR Comment ID {comment} Uploaded for Test_id: {test_id}'.format(
+                comment=comment_id, test_id=test_id))
+    except Exception as e:
+        log.error('Github PR Comment Failed for Test_id: {test_id} with Exception {exp}'.format(
+            test_id=test_id, exp=e))
+    return
 
 
 @mod_ci.route('/show_maintenance')

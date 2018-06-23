@@ -1,4 +1,4 @@
-from flask_wtf import Form
+from flask_wtf import FlaskForm
 from wtforms import PasswordField, StringField, SubmitField, SelectField
 from wtforms.fields.html5 import EmailField
 from wtforms.validators import DataRequired, Email, ValidationError
@@ -29,12 +29,16 @@ def valid_password(form, field):
     :param field: The data value for the 'password' inserted by User
     :type field : PasswordField
     """
+    from run import config
+    min_pwd_len = int(config['MIN_PWD_LEN'])
+    max_pwd_len = int(config['MAX_PWD_LEN'])
     pass_size = len(field.data)
     if pass_size == 0:
         raise ValidationError('new password cannot be empty')
-    if pass_size < 10 or pass_size > 500:
+    if pass_size < min_pwd_len or pass_size > max_pwd_len:
         raise ValidationError(
-            'Password needs to be between 10 and 500 characters long (you entered {char})'.format(char=pass_size)
+            'Password needs to be between {min_pwd_len} and {max_pwd_len} characters long (you entered {char})'.format(
+                min_pwd_len=min_pwd_len, max_pwd_len=max_pwd_len, char=pass_size)
         )
 
 
@@ -70,7 +74,7 @@ def role_id_is_valid(form, field):
         raise ValidationError('Role id is invalid')
 
 
-class LoginForm(Form):
+class LoginForm(FlaskForm):
     """
     The form rendered when a User has to enter Log in credentials
     """
@@ -82,7 +86,7 @@ class LoginForm(Form):
     submit = SubmitField('Login')
 
 
-class SignupForm(Form):
+class SignupForm(FlaskForm):
     """
     Sign up form for new Users.
     """
@@ -93,14 +97,14 @@ class SignupForm(Form):
     submit = SubmitField('Register')
 
 
-class DeactivationForm(Form):
+class DeactivationForm(FlaskForm):
     """
     Deactivate existing account
     """
     submit = SubmitField('Deactivate account')
 
 
-class RoleChangeForm(Form):
+class RoleChangeForm(FlaskForm):
     """
     Changing the Role
     """
@@ -108,7 +112,7 @@ class RoleChangeForm(Form):
     submit = SubmitField('Change role')
 
 
-class CompleteSignupForm(Form):
+class CompleteSignupForm(FlaskForm):
     """
     The Complete Sign up form for new users.
     """
@@ -131,12 +135,12 @@ class CompleteSignupForm(Form):
             raise ValidationError('The password needs to match the new password')
 
 
-class AccountForm(Form):
+class AccountForm(FlaskForm):
     """
     Form for editing current Account
     """
     def __init__(self, formdata=None, obj=None, prefix='', *args, **kwargs):
-        super(AccountForm, self).__init__(formdata, obj, prefix, *args, **kwargs)
+        super(AccountForm, self).__init__(formdata=formdata, obj=obj, prefix=prefix, *args, **kwargs)
         self.user = obj
 
     current_password = PasswordField('Current password', [DataRequired(message='current password cannot be empty')])
@@ -201,7 +205,7 @@ class AccountForm(Form):
             raise ValidationError('The password needs to match the new password')
 
 
-class ResetForm(Form):
+class ResetForm(FlaskForm):
     """
     Form for resetting password
     """
@@ -212,7 +216,7 @@ class ResetForm(Form):
     submit = SubmitField('Request reset instructions')
 
 
-class CompleteResetForm(Form):
+class CompleteResetForm(FlaskForm):
     """
     Resetting password after clicking on the link in the email
     """

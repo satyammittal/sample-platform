@@ -27,7 +27,7 @@ echo ""
 echo "* Updating package list"
 apt-get update >> "$install_log" 2>&1
 echo "* Installing nginx, python, pip, kvm, libvirt and virt-manager"
-apt-get -q -y install nginx python python-dev libxslt1-dev libxml2-dev python-pip qemu-kvm libvirt-bin virt-manager mediainfo >> "$install_log" 2>&1
+apt-get -q -y install nginx python python-dev python3-libvirt libxslt1-dev libxml2-dev python-pip qemu-kvm libvirt-bin virt-manager mediainfo >> "$install_log" 2>&1
 if [ ! -f /etc/init.d/mysql* ]; then
     echo "* Installing MySQL (root password will be empty!)"
     DEBIAN_FRONTEND=noninteractive apt-get install -y mysql-server >> "$install_log" 2>&1
@@ -112,6 +112,10 @@ read -e -p "KVM Max Runtime (In minutes): " -i "120" kvm_max_runtime
 read -e -p "FTP Server IP/Domain name :" -i "" server_name
 read -e -p "FTP port: " -i "21" ftp_port
 read -e -p "Max HTTP sample size (in bytes) : " -i "536870912" max_content_length
+read -e -p "Minimum password length : " -i "10" min_pwd_len
+read -e -p "Maximum password length : " -i "500" max_pwd_len
+
+
 echo ""
 echo "In the following lines, enter the path "
 read -e -p "    To SSL certificate: " -i "/etc/letsencrypt/live/${config_server_name}/fullchain.pem" config_ssl_cert
@@ -159,7 +163,7 @@ echo "* Generating config file"
 echo "# Auto-generated configuration by install.sh
 APPLICATION_ROOT = ${config_application_root}
 CSRF_ENABLED = True
-DATABASE_URI = '${config_db_uri}'
+DATABASE_URI = '${config_db_uri}?charset=utf8'
 GITHUB_TOKEN = '${github_token}'
 GITHUB_OWNER = '${github_owner_name}'
 GITHUB_REPOSITORY = '${github_repository}'
@@ -174,8 +178,11 @@ KVM_LINUX_NAME = '${kvm_linux_name}'
 KVM_WINDOWS_NAME = '${kvm_windows_name}'
 KVM_MAX_RUNTIME = $kvm_max_runtime # In minutes
 SAMPLE_REPOSITORY = '${sample_repository}'
+SESSION_COOKIE_PATH = '/'
 FTP_PORT = $ftp_port
 MAX_CONTENT_LENGTH = $max_content_length
+MIN_PWD_LEN = $min_pwd_len
+MAX_PWD_LEN = $max_pwd_len
 " > "${dir}/../config.py"
 # Ensure the files are executable by www-data
 chown -R www-data:www-data "${root_dir}" "${sample_repository}"

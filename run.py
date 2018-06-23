@@ -69,7 +69,8 @@ def install_secret_keys(application, secret_session='secret_key', secret_csrf='s
         sys.exit(1)
 
 
-install_secret_keys(app)
+if 'TESTING' not in os.environ or os.environ['TESTING'] == 'False':
+    install_secret_keys(app)
 
 
 # Expose submenu method for jinja templates
@@ -89,9 +90,6 @@ def date_time_format(value, fmt='%Y-%m-%d %H:%M:%S'):
     return value.strftime(fmt)
 
 
-app.jinja_env.filters['date'] = date_time_format
-
-
 def get_github_issue_link(issue_id):
     return 'https://www.github.com/{org}/{repo}/issues/{id}'.format(
         org=config.get('GITHUB_OWNER', ''),
@@ -100,7 +98,13 @@ def get_github_issue_link(issue_id):
     )
 
 
+def filename(filepath):
+    return os.path.basename(filepath)
+
+
+app.jinja_env.filters['date'] = date_time_format
 app.jinja_env.filters['issue_link'] = get_github_issue_link
+app.jinja_env.filters['filename'] = filename
 
 
 class RegexConverter(BaseConverter):
@@ -155,6 +159,7 @@ def before_request():
         'deploy_key': app.config.get('GITHUB_DEPLOY_KEY', ''),
         'ci_key': app.config.get('GITHUB_CI_KEY', ''),
         'bot_token': app.config.get('GITHUB_TOKEN', ''),
+        'bot_name': app.config.get('GITHUB_BOT', ''),
         'repository_owner': app.config.get('GITHUB_OWNER', ''),
         'repository': app.config.get('GITHUB_REPOSITORY', '')
     }

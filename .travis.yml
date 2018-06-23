@@ -4,28 +4,18 @@ python:
   - 3.5
   - 3.6
   - nightly
+
+# environment variables
+env:
+ - TESTING=True
+
 install:
   - sudo apt-get install libvirt-dev
   - pip install codecov
   - pip install nose-cov
-  - pip install Flask
+  - pip install -r requirements.txt
   - pip install Flask-Testing
-  - pip install SQLAlchemy
-  - pip install passlib
-  - pip install pymysql
-  - pip install python-magic
-  - pip install flask-wtf
-  - pip install gunicorn
-  - pip install githubpy
-  - pip install requests
-  - pip install pyIsEmail
-  - pip install ipaddress
-  - pip install GitPython
-  - pip install xmltodict
-  - pip install lxml
-  - pip install pytz
-  - pip install tzlocal
-  - pip install libvirt-python
+  - pip install blinker
 script:
   - nosetests --with-cov --cov-config .coveragerc
 after_success:

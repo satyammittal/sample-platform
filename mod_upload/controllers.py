@@ -27,7 +27,7 @@ from mod_home.models import CCExtractorVersion
 from mod_sample.models import Sample, ForbiddenExtension, ForbiddenMimeType, Issue
 from mod_upload.forms import UploadForm, DeleteQueuedSampleForm, \
     FinishQueuedSampleForm
-from models import Upload, QueuedSample, UploadLog, FTPCredentials, Platform
+from .models import Upload, QueuedSample, UploadLog, FTPCredentials, Platform
 
 mod_upload = Blueprint('upload', __name__)
 
@@ -161,7 +161,7 @@ def ftp_filezilla():
             host=config.get('SERVER_NAME', ''),
             port=config.get('FTP_PORT', ''),
             username=credentials.user_name,
-            password=base64.b64encode(credentials.password)
+            password=base64.b64encode(credentials.password.encode()).decode()
         )
     )
     response.headers['Content-Description'] = 'File Transfer'
@@ -427,7 +427,9 @@ def add_sample_to_queue(file_hash, temp_path, user_id, db):
     :rtype: void
     """
     from run import config
-    filename, file_extension = os.path.splitext(temp_path)
+    # Fetch file name from file path
+    uploaded_file = os.path.basename(temp_path)
+    filename, file_extension = os.path.splitext(uploaded_file)
     queued_sample = QueuedSample(file_hash, file_extension,
                                  filename, user_id)
     final_path = os.path.join(
