@@ -21,6 +21,7 @@ from mod_regression.controllers import mod_regression
 from mod_sample.controllers import mod_sample
 from mod_test.controllers import mod_test
 from mod_upload.controllers import mod_upload
+from mod_customized.controllers import mod_customized
 
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app)
@@ -44,10 +45,11 @@ def install_secret_keys(application, secret_session='secret_key', secret_csrf='s
     If the file does not exist, print instructions to create it from a shell with a random key, then exit.
     """
     do_exit = False
-    session_file = os.path.join(application.root_path, secret_session)
-    csrf_file = os.path.join(application.root_path, secret_csrf)
+    session_file_path = os.path.join(application.root_path, secret_session)
+    csrf_file_path = os.path.join(application.root_path, secret_csrf)
     try:
-        application.config['SECRET_KEY'] = open(session_file, 'rb').read()
+        with open(session_file_path, 'rb') as session_file:
+            application.config['SECRET_KEY'] = session_file.read()
     except IOError:
         traceback.print_exc()
         print('Error: No secret key. Create it with:')
@@ -57,7 +59,8 @@ def install_secret_keys(application, secret_session='secret_key', secret_csrf='s
         do_exit = True
 
     try:
-        application.config['CSRF_SESSION_KEY'] = open(csrf_file, 'rb').read()
+        with open(csrf_file_path, 'rb') as csrf_file:
+            application.config['CSRF_SESSION_KEY'] = csrf_file.read()
     except IOError:
         print('Error: No secret CSRF key. Create it with:')
         if not os.path.isdir(os.path.dirname(csrf_file)):
@@ -155,13 +158,17 @@ def before_request():
     )
     g.version = "0.1"
     g.log = log
-    g.github = {
-        'deploy_key': app.config.get('GITHUB_DEPLOY_KEY', ''),
-        'ci_key': app.config.get('GITHUB_CI_KEY', ''),
-        'bot_token': app.config.get('GITHUB_TOKEN', ''),
-        'bot_name': app.config.get('GITHUB_BOT', ''),
-        'repository_owner': app.config.get('GITHUB_OWNER', ''),
-        'repository': app.config.get('GITHUB_REPOSITORY', '')
+    g.github = get_github_config(app.config)
+
+
+def get_github_config(config):
+    return {
+        'deploy_key': config.get('GITHUB_DEPLOY_KEY', ''),
+        'ci_key': config.get('GITHUB_CI_KEY', ''),
+        'bot_token': config.get('GITHUB_TOKEN', ''),
+        'bot_name': config.get('GITHUB_BOT', ''),
+        'repository_owner': config.get('GITHUB_OWNER', ''),
+        'repository': config.get('GITHUB_REPOSITORY', '')
     }
 
 
@@ -181,6 +188,7 @@ app.register_blueprint(mod_home)
 app.register_blueprint(mod_deploy)
 app.register_blueprint(mod_test, url_prefix="/test")
 app.register_blueprint(mod_ci)
+app.register_blueprint(mod_customized, url_prefix='/custom')
 
 if __name__ == '__main__':
     # Run in development mode; Werkzeug server

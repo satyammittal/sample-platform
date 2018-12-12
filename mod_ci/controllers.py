@@ -37,6 +37,7 @@ from mod_auth.models import Role
 from mod_home.models import CCExtractorVersion
 from mod_sample.models import Issue
 from mod_test.models import TestType, Test, TestStatus, TestProgress, Fork, TestPlatform, TestResultFile, TestResult
+from mod_customized.models import CustomizedTest
 from mailer import Mailer
 
 if sys.platform.startswith("linux"):
@@ -59,10 +60,8 @@ def before_app_request():
     """
     config_entries = get_menu_entries(
         g.user, 'Platform mgmt', 'cog', [], '', [
-            {'title': 'Maintenance', 'icon': 'wrench', 'route':
-                'ci.show_maintenance', 'access': [Role.admin]},
-            {'title': 'Blocked Users', 'icon': 'ban', 'route':
-                'ci.blocked_users', 'access': [Role.admin]}
+            {'title': 'Maintenance', 'icon': 'wrench', 'route': 'ci.show_maintenance', 'access': [Role.admin]},
+            {'title': 'Blocked Users', 'icon': 'ban', 'route': 'ci.blocked_users', 'access': [Role.admin]}
         ]
     )
     if 'config' in g.menu_entries and 'entries' in config_entries:
@@ -76,7 +75,7 @@ def start_platform(db, repository, delay=None):
     Function to check whether there is already running test for which it check the kvm progress and if no running test
     then it start a new test.
     """
-    from run import config
+    from run import config, log
 
     linux_kvm_name = config.get('KVM_LINUX_NAME', '')
     win_kvm_name = config.get('KVM_WINDOWS_NAME', '')
@@ -84,12 +83,15 @@ def start_platform(db, repository, delay=None):
 
     if kvm_test is None:
         start_new_test(db, repository, delay)
-    elif kvm_test.name is linux_kvm_name:
+    elif kvm_test.name == linux_kvm_name:
         kvm_processor_linux(db, repository, delay)
-    elif kvm_test.name is win_kvm_name:
+    elif kvm_test.name == win_kvm_name:
         kvm_processor_windows(db, repository, delay)
-
-    return
+    else:
+        log.error(
+            "There's a test in the KVM machine, but none of the platforms matched! We got {name}, compared against "
+            "{lin}, {win}".format(name=kvm_test.name, lin=linux_kvm_name, win=win_kvm_name)
+        )
 
 
 def start_new_test(db, repository, delay):
@@ -105,9 +107,9 @@ def start_new_test(db, repository, delay):
 
     if test is None:
         return
-    elif test.platform is TestPlatform.windows:
+    elif test.platform == TestPlatform.windows:
         kvm_processor_windows(db, repository, delay)
-    elif test.platform is TestPlatform.linux:
+    elif test.platform == TestPlatform.linux:
         kvm_processor_linux(db, repository, delay)
     else:
         log.error("Unsupported CI platform: {platform}".format(platform=test.platform))
@@ -135,7 +137,9 @@ def kvm_processor(db, kvm_name, platform, repository, delay):
     Creates testing xml files to test the change in main repo.
     Creates clone with separate branch and merge pr into it.
     """
-    from run import config, log, app
+    from run import config, log, app, get_github_config
+
+    github_config = get_github_config(config)
 
     log.info("[{platform}] Running kvm_processor".format(platform=platform))
     if kvm_name == "":
@@ -148,9 +152,8 @@ def kvm_processor(db, kvm_name, platform, repository, delay):
         time.sleep(delay)
 
     maintenance_mode = MaintenanceMode.query.filter(MaintenanceMode.platform == platform).first()
-
     if maintenance_mode is not None and maintenance_mode.disabled:
-        log.debug('[{platform}] In maintenance mode! Waiting...').format(platform=platform)
+        log.debug('[{platform}] In maintenance mode! Waiting...'.format(platform=platform))
         return
 
     # Open connection to libvirt
@@ -205,9 +208,16 @@ def kvm_processor(db, kvm_name, platform, repository, delay):
     finished_tests = db.query(TestProgress.test_id).filter(
         TestProgress.status.in_([TestStatus.canceled, TestStatus.completed])
     ).subquery()
+    fork = Fork.query.filter(Fork.github.like(
+        "%/{owner}/{repo}.git".format(owner=github_config['repository_owner'], repo=github_config['repository'])
+    )).first()
     test = Test.query.filter(
-        and_(Test.id.notin_(finished_tests), Test.platform == platform)
+            Test.id.notin_(finished_tests), Test.platform == platform, Test.fork_id == fork.id
     ).order_by(Test.id.asc()).first()
+
+    if test is None:
+        test = Test.query.filter(Test.id.notin_(finished_tests), Test.platform == platform).order_by(
+            Test.id.asc()).first()
 
     if test is None:
         log.info('[{platform}] No more tests to run, returning'.format(platform=platform))
@@ -253,6 +263,8 @@ def kvm_processor(db, kvm_name, platform, repository, delay):
 
     log.debug("[{p}] We will compare against the results of test {id}".format(p=platform, id=last_commit.id))
 
+    regression_ids = test.get_customized_regressiontests()
+
     # Init collection file
     multi_test = etree.Element('multitest')
     for category in categories:
@@ -262,7 +274,11 @@ def kvm_processor(db, kvm_name, platform, repository, delay):
         # Create XML file for test
         file_name = '{name}.xml'.format(name=category.name)
         single_test = etree.Element('tests')
+        check_write = False
         for regression_test in category.regression_tests:
+            if regression_test.id not in regression_ids:
+                continue
+            check_write = True
             entry = etree.SubElement(single_test, 'entry', id=str(regression_test.id))
             command = etree.SubElement(entry, 'command')
             command.text = regression_test.command
@@ -293,7 +309,9 @@ def kvm_processor(db, kvm_name, platform, repository, delay):
 
                 expected = etree.SubElement(file_node, 'expected')
                 expected.text = output_file.filename_expected(regression_test.sample.sha)
-
+        # check whether category should be included or not
+        if not check_write:
+            continue
         # Save XML
         single_test.getroottree().write(
             os.path.join(base_folder, file_name), encoding='utf-8', xml_declaration=True, pretty_print=True
@@ -319,7 +337,17 @@ def kvm_processor(db, kvm_name, platform, repository, delay):
     repo.heads.master.checkout(True)
     # Update repository from upstream
     try:
-        origin = repo.remote('origin')
+        fork_id = test.fork.id
+        fork_url = test.fork.github
+        if not check_main_repo(fork_url):
+            existing_remote = [remote.name for remote in repo.remotes]
+            remote = ('fork_{id}').format(id=fork_id)
+            if remote in existing_remote:
+                origin = repo.remote(remote)
+            else:
+                origin = repo.create_remote(remote, url=fork_url)
+        else:
+            origin = repo.remote('origin')
     except ValueError:
         log.critical("[{platform}] Origin remote doesn't exist!".format(platform=platform))
         return
@@ -327,12 +355,12 @@ def kvm_processor(db, kvm_name, platform, repository, delay):
     fetch_info = origin.fetch()
     if len(fetch_info) == 0:
         log.info('[{platform}] Fetch from remote returned no new data...'.format(platform=platform))
-
+    # Checkout to Remote Master
+    repo.git.checkout(origin.refs.master)
     # Pull code (finally)
-    pull_info = origin.pull()
+    pull_info = origin.pull('master')
     if len(pull_info) == 0:
         log.info("[{platform}] Pull from remote returned no new data...".format(platform=platform))
-
     if pull_info[0].flags > 128:
         log.critical("[{platform}] Didn't pull any information from remote: {flags}!".format(
                 platform=platform, flags=pull_info[0].flags))
@@ -349,10 +377,9 @@ def kvm_processor(db, kvm_name, platform, repository, delay):
         shutil.rmtree(os.path.join(config.get('SAMPLE_REPOSITORY', ''), 'unsafe-ccextractor', '.git', 'rebase-apply'))
     except OSError:
         log.warn("[{platform}] Could not delete rebase-apply".format(platform=platform))
-
     # If PR, merge, otherwise reset to commit
     if test.test_type == TestType.pull_request:
-        # Fetch PR (stored under origin/pull/<id>/head
+        # Fetch PR (stored under origin/pull/<id>/head)
         pull_info = origin.fetch('pull/{id}/head:CI_Branch'.format(id=test.pr_nr))
         if len(pull_info) == 0:
             log.warn("[{platform}] Didn't pull any information from remote PR!".format(platform=platform))
@@ -395,7 +422,7 @@ def kvm_processor(db, kvm_name, platform, repository, delay):
         repo.git.merge('master')
 
     else:
-        test_branch = repo.create_head('CI_Branch', 'HEAD')
+        test_branch = repo.create_head('CI_Branch', origin.refs.master)
         test_branch.checkout(True)
         try:
             repo.head.reset(test.commit, working_tree=True)
@@ -413,6 +440,9 @@ def kvm_processor(db, kvm_name, platform, repository, delay):
         log.critical("[{platform}] Failed to launch VM {name}".format(platform=platform, name=kvm_name))
     except IntegrityError:
         log.warn("[{platform}] Duplicate entry for {id}".format(platform=platform, id=test.id))
+
+    # Close connection to libvirt
+    conn.close()
 
 
 def queue_test(db, gh_commit, commit, test_type, branch="master", pr_nr=0):
@@ -436,7 +466,8 @@ def queue_test(db, gh_commit, commit, test_type, branch="master", pr_nr=0):
     """
     from run import log
 
-    fork = Fork.query.filter(Fork.github.like("%/CCExtractor/ccextractor.git")).first()
+    fork = Fork.query.filter(Fork.github.like(("%/{owner}/{repo}.git").format(owner=g.github['repository_owner'],
+                                                                              repo=g.github['repository']))).first()
 
     if test_type == TestType.pull_request:
         branch = "pull_request"
@@ -446,6 +477,8 @@ def queue_test(db, gh_commit, commit, test_type, branch="master", pr_nr=0):
     windows_test = Test(TestPlatform.windows, test_type, fork.id, branch, commit, pr_nr)
     db.add(windows_test)
     db.commit()
+    add_customized_regression_tests(linux_test.id)
+    add_customized_regression_tests(windows_test.id)
 
     if gh_commit is not None:
         status_entries = {
@@ -473,18 +506,24 @@ def inform_mailing_list(mailer, id, title, author, body):
     :type mailer: Mailer
     :param id: ID of the Issue Opened
     :type id: int
-    :param title: Title of the Created Ossie
+    :param title: Title of the Created Issue
     :type title: str
     :param author: The Authors Username of the Issue
     :type author: str
     :param body: The Content of the Issue
     :type body: str
     """
+    from run import get_github_issue_link
     subject = "GitHub Issue #{issue_number}".format(issue_number=id)
+    url = get_github_issue_link(id)
     mailer.send_simple_message({
         "to": "ccextractor-dev@googlegroups.com",
         "subject": subject,
-        "text": "{title} - {author}\n {body}".format(title=title, author=author, body=body)
+        "text": """{title} - {author}\n
+        Link to Issue: {url}\n
+        {author}(https://github.com/{author})\n\n
+        {body}
+        """.format(title=title, author=author, body=body, issue_number=id, url=url)
     })
 
 
@@ -656,7 +695,7 @@ def update_build_badge(status, test):
     :return: Nothing.
     :rtype: None
     """
-    if test.test_type == TestType.commit:
+    if test.test_type == TestType.commit and check_main_repo(test.fork.github):
         parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         availableon = os.path.join(parent_dir, 'static', 'svg',
                                    '{status}-{platform}.svg'.format(status=status.upper(),
@@ -710,7 +749,7 @@ def progress_reporter(test_id, token):
                 gh = GitHub(access_token=g.github['bot_token'])
                 repository = gh.repos(g.github['repository_owner'])(g.github['repository'])
                 # Store the test commit for testing in case of commit
-                if status == TestStatus.completed:
+                if status == TestStatus.completed and check_main_repo(test.fork.github):
                     commit_name = 'fetch_commit_' + test.platform.value
                     commit = GeneralData.query.filter(GeneralData.key == commit_name).first()
                     fetch_commit = Test.query.filter(
@@ -976,7 +1015,7 @@ def comment_pr(test_id, state, pr_nr, platform):
         bot_name = g.github['bot_name']
         comment_id = None
         for comment in comments:
-            if(comment['user']['login'] == bot_name and platform in comment['body']):
+            if comment['user']['login'] == bot_name and platform in comment['body']:
                 comment_id = comment['id']
                 break
         log.debug('Github PR Comment ID Fetched for Test_id: {test_id}'.format(test_id=test_id))
@@ -984,14 +1023,11 @@ def comment_pr(test_id, state, pr_nr, platform):
             comment = pull_request.comments().post(body=message)
             comment_id = comment['id']
         else:
-            pull_request = repository.issues()
-            comment = pull_request.comments(comment_id).post(body=message)
+            repository.issues().comments(comment_id).post(body=message)
         log.debug('Github PR Comment ID {comment} Uploaded for Test_id: {test_id}'.format(
                 comment=comment_id, test_id=test_id))
     except Exception as e:
-        log.error('Github PR Comment Failed for Test_id: {test_id} with Exception {exp}'.format(
-            test_id=test_id, exp=e))
-    return
+        log.error('Github PR Comment Failed for Test_id: {test_id} with Exception {e}'.format(test_id=test_id, e=e))
 
 
 @mod_ci.route('/show_maintenance')
@@ -1135,3 +1171,25 @@ def in_maintenance_mode(platform):
         g.db.commit()
 
     return str(status.disabled)
+
+
+def check_main_repo(repo_url):
+    """
+    Check whether the repo_url links to the main repository or not
+    :param repo_url: url of fork/main repository of the user
+    :type repo_url: str
+    :return: checks whether url of main repo is same or not
+    :rtype: bool
+    """
+    from run import config, get_github_config
+
+    gh_config = get_github_config(config)
+    return '{user}/{repo}'.format(user=gh_config['repository_owner'], repo=gh_config['repository']) in repo_url
+
+
+def add_customized_regression_tests(test_id):
+    active_regression_tests = RegressionTest.query.filter(RegressionTest.active == 1).all()
+    for regression_test in active_regression_tests:
+        customized_test = CustomizedTest(test_id, regression_test.id)
+        g.db.add(customized_test)
+        g.db.commit()
